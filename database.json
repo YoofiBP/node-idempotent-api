@@ -1,0 +1,3 @@
+{
+  "dev": "postgresql://yoofi@localhost:5432/idempotent_api"
+}
