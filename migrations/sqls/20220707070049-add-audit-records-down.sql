@@ -1,1 +1,1 @@
-/* Replace with your SQL commands */
+DROP table audit_records;

@@ -5,3 +5,5 @@ CREATE TABLE users (
 );
 
 ALTER TABLE idempotency_keys ADD CONSTRAINT idempotency_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT;
+
+insert into users (email,stripe_customer_id) values ('yoofi@email', '670b5566-850f-40cc-8619-052d9a00d265')

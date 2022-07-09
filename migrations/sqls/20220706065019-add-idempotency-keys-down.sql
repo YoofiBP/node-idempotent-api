@@ -1,1 +1,1 @@
-/* Replace with your SQL commands */
+DROP table idempotency_keys;
