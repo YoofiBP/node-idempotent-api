@@ -1,7 +1,7 @@
 import {z} from "zod";
 import {IdempotencyKeyParams, RideCreationParams, RideDestinationParams} from "./zodSchemas";
 import {idempotency_keys} from "@prisma/client";
-import prisma from "./db";
+import prisma from "./database";
 import {AtomicPhaseOutput, RecoveryPoint, RecoveryPointEnum, Response, TransactionError} from "./utils";
 import isEqual from "lodash/isEqual";
 import dayjs from "dayjs";
@@ -35,12 +35,14 @@ export const createOrUpdateIdemKey =
                 if (!isEqual(idemKey.request_params, rest.requestParams)) {
                     throw new TransactionError(
                         {
+                            status: 409,
                             message: 'Different params used'
                         }
                     )
                 }
                 if (dayjs(idemKey.locked_at).isAfter(dayjs(new Date()).subtract(90, 'seconds'))) {
                     throw new TransactionError({
+                        status: 409,
                         message: 'Key locked'
                     })
                 }
@@ -97,6 +99,7 @@ export const atomicPhase = async (key: idempotency_keys, phase: () => Promise<At
         throw e;
     }
 }
+
 const createRide = async ({
                               idempotencyKeyId,
                               originLat,
@@ -105,17 +108,27 @@ const createRide = async ({
                               targetLon,
                               userID
                           }: z.infer<typeof RideCreationParams>) => {
-    await prisma.rides.create({
-        data: {
-            idempotency_key_id: idempotencyKeyId,
-            origin_lat: originLat,
-            origin_lon: originLon,
-            target_lat: targetLat,
-            target_lon: targetLon,
-            user_id: userID
-        }
-    })
-    return new RecoveryPoint({recoveryPoint: RecoveryPointEnum.ride_created})
+    try {
+        await prisma.rides.create({
+            data: {
+                idempotency_key_id: idempotencyKeyId,
+                origin_lat: originLat,
+                origin_lon: originLon,
+                target_lat: targetLat,
+                target_lon: targetLon,
+                user_id: userID
+            }
+        })
+        return new RecoveryPoint({recoveryPoint: RecoveryPointEnum.ride_created})
+    }  catch (e) {
+        return new Response({
+            status: 500,
+            body: {
+                error: "Could not create ride"
+            }
+        })
+    }
+
 }
 
 const createStripeCharge = async () => {
@@ -150,62 +163,89 @@ export const performRideSetup = async (key: idempotency_keys, params: z.infer<ty
                     break;
                 case RecoveryPointEnum.ride_created:
                     await atomicPhase(idemKey, async () => {
-                        const {chargeID} = await createStripeCharge();
-                        const ride = await prisma.rides.findFirst({
-                            where: {
-                                idempotency_key_id: idemKey.id
+                        try {
+                            const {chargeID} = await createStripeCharge();
+                            if(!chargeID) {
+                                throw new TransactionError({
+                                    status: 402,
+                                    message: 'Stripe rejected payment'
+                                })
                             }
-                        });
-                        if (!ride) {
-                            throw new TransactionError(
-                                {message: 'Ride not found'}
-                            )
+                            const ride = await prisma.rides.findFirst({
+                                where: {
+                                    idempotency_key_id: idemKey.id
+                                }
+                            });
+                            if (!ride) {
+                                throw new TransactionError(
+                                    {message: 'Ride not found'}
+                                )
+                            }
+                            await prisma.rides.update({
+                                where: {
+                                    id: ride.id
+                                },
+                                data: {
+                                    stripe_charge_id: chargeID
+                                }
+                            })
+                            return new RecoveryPoint({
+                                recoveryPoint: RecoveryPointEnum.charge_created
+                            })
+                        } catch (e) {
+                            return new Response({
+                                status: 500,
+                                body: {
+                                    message: 'error creating stripe charge'
+                                }
+                            })
                         }
-                        await prisma.rides.update({
-                            where: {
-                                id: ride.id
-                            },
-                            data: {
-                                stripe_charge_id: chargeID
-                            }
-                        })
-                        return new RecoveryPoint({
-                            recoveryPoint: RecoveryPointEnum.charge_created
-                        })
+
                     })
                     break;
                 case RecoveryPointEnum.charge_created:
                     await atomicPhase(idemKey, async () => {
-                        const ride = await prisma.rides.findFirst({
-                            where: {
-                                idempotency_key_id: idemKey.id
+                        try {
+                            const ride = await prisma.rides.findFirst({
+                                where: {
+                                    idempotency_key_id: idemKey.id
+                                }
+                            });
+                            if (!ride) {
+                                throw new TransactionError({
+                                    message: 'ride not found'
+                                })
                             }
-                        });
-                        if (!ride) {
-                            throw new TransactionError({
-                                message: 'ride not found'
+                            await prisma.staged_jobs.create({
+                                data: {
+                                    job_name: 'send_ride_receipt',
+                                    job_args: {
+                                        amount: 20,
+                                        currency: "USD",
+                                        userID: ride.user_id.toString()
+                                    }
+                                }
+                            })
+                            return new Response({
+                                status: 201,
+                                body: {
+                                    message: "ride created"
+                                }
+                            })
+                        } catch (e) {
+                            return new Response({
+                                status: 500,
+                                body: {
+                                    message: 'error updating ride info'
+                                }
                             })
                         }
-                        await prisma.staged_jobs.create({
-                            data: {
-                                job_name: 'send_ride_receipt',
-                                job_args: {
-                                    amount: 20,
-                                    currency: "USD",
-                                    userID: ride.user_id.toString()
-                                }
-                            }
-                        })
-                        return new Response({
-                            status: 201,
-                            body: {
-                                message: "ride created"
-                            }
-                        })
                     })
                     break;
                 case RecoveryPointEnum.finished:
                     break outside;
+                default:
+                    throw new Error('Unsupported recovery point')
             }
 
         }

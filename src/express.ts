@@ -13,7 +13,9 @@ app.post('/rides', async (req, res) => {
         const key = req.headers['idempotency-key'];
 
         if(typeof key !== 'string'){
-            throw new Error();
+            throw new TransactionError({
+                message: 'Idempotency-Key header required'
+            });
         }
 
         const idemKey = await createOrUpdateIdemKey({

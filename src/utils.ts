@@ -1,4 +1,4 @@
-import prisma from "./db";
+import prisma from "./database";
 import {idempotency_keys} from '@prisma/client'
 
 export type AtomicPhaseOutput = Response | RecoveryPoint | NoOp;
