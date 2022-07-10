@@ -8,7 +8,7 @@ export const IdempotencyKeyParams = z.object({
     userId: z.number()
 })
 
-export const RideInputParams = z.object({
+export const RideCreationParams = z.object({
     originLat: z.number(),
     originLon: z.number(),
     targetLat: z.number(),
@@ -16,4 +16,11 @@ export const RideInputParams = z.object({
     userID: z.number(),
     idempotencyKeyId: z.bigint(),
     stripeChargeId: z.string().optional()
+})
+
+export const RideDestinationParams = RideCreationParams.pick({
+    originLat: true,
+    originLon: true,
+    targetLat: true,
+    targetLon: true
 })
